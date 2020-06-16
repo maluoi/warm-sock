@@ -80,7 +80,7 @@ sock_connection_id sock_get_id   ();
 int32_t _sock_init();
 void    _sock_on_receive(sock_header_t header, const void *data);
 void    _sock_send_ex   (sock_header_t header, const void *data);
-void    _sock_connection_close(sock_connection_id id);
+void    _sock_connection_close(sock_connection_id id, bool notify);
 int32_t _sock_server_new_connection();
 bool    _sock_server_poll();
 bool    _sock_client_poll();
@@ -132,11 +132,30 @@ int32_t _sock_init() {
 ///////////////////////////////////////////
 
 void sock_shutdown() {
-	// Shut down any client connections
-	for (int32_t i = 0; i < _countof(sock_conns); i++) {
-		_sock_connection_close(i);
-	}
+	// Manually notify of disconnect, since everything is shutting down
+	uint8_t            msg[sizeof(sock_header_t) + sizeof(sock_conn_event_t)];
+	sock_header_t     *header = (sock_header_t    *)&msg[0];
+	sock_conn_event_t *evt    = (sock_conn_event_t*)&msg[sizeof(sock_header_t)];
+	header->from      = sock_self_id;
+	header->to        = -2;
+	header->data_id   = sock_type_id(sock_conn_event_t);
+	header->data_size = sizeof(sock_conn_event_t);
+	evt->id     = sock_self_id;
+	evt->status = sock_connect_status_left;
 
+	// Notify to self
+	_sock_on_receive(*header, evt);
+
+	// Notify and shut down client connections
+	if (sock_server) {
+		for (int32_t i = 0; i < _countof(sock_conns); i++) {
+			if (sock_conns[i].connected) {
+				send(sock_conns[i].sock, (char *)&msg[0], _countof(msg), 0);
+				_sock_connection_close(i, false);
+			}
+		}
+	}
+	
 	if (sock_primary != INVALID_SOCKET) closesocket(sock_primary);
 	sock_primary = INVALID_SOCKET;
 
@@ -149,7 +168,7 @@ void sock_shutdown() {
 
 ///////////////////////////////////////////
 
-void _sock_connection_close(sock_connection_id id) {
+void _sock_connection_close(sock_connection_id id, bool notify) {
 	if (sock_conns[id].connected) {
 		shutdown   (sock_conns[id].sock, SD_SEND);
 		closesocket(sock_conns[id].sock);
@@ -159,10 +178,12 @@ void _sock_connection_close(sock_connection_id id) {
 		sock_conns[id].connected  = false;
 		sock_conn_count -= 1;
 
-		sock_conn_event_t evt = {};
-		evt.id     = id;
-		evt.status = sock_connect_status_left;
-		sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
+		if (notify) {
+			sock_conn_event_t evt = {};
+			evt.id     = id;
+			evt.status = sock_connect_status_left;
+			sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
+		}
 	}
 }
 
@@ -455,7 +476,7 @@ bool _sock_server_poll() {
 			count += 1;
 
 			if (FD_ISSET(conn.sock, &fd_except)) {
-				_sock_connection_close(i);
+				_sock_connection_close(i, true);
 				FD_CLR(conn.sock, &fd_except);
 			} else {
 				if (FD_ISSET(conn.sock, &fd_read)) {
@@ -464,7 +485,7 @@ bool _sock_server_poll() {
 					if (data_size < 1) {
 						if (data_size < 0)
 							printf("recv failed with error: %d\n", WSAGetLastError());
-						_sock_connection_close(i);
+						_sock_connection_close(i, true);
 					} else {
 						conn.in_buffer.curr += data_size;
 						_sock_buffer_submit(&conn.in_buffer);
