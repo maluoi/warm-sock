@@ -77,13 +77,13 @@ sock_connection_id sock_get_id   ();
 
 ///////////////////////////////////////////
 
-int32_t _sock_init();
-void    _sock_on_receive(sock_header_t header, const void *data);
-void    _sock_send_ex   (sock_header_t header, const void *data);
-void    _sock_connection_close(sock_connection_id id, bool notify);
+int32_t _sock_init         ();
+void    _sock_on_receive   (sock_header_t header, const void *data);
+void    _sock_send_ex      (sock_header_t header, const void *data);
+void    _sock_connection_close     (sock_connection_id id, bool notify);
 int32_t _sock_server_new_connection();
-bool    _sock_server_poll();
-bool    _sock_client_poll();
+bool    _sock_server_poll  ();
+bool    _sock_client_poll  ();
 void    _sock_buffer_create(sock_buffer_t *buffer);
 void    _sock_buffer_free  (sock_buffer_t *buffer);
 void    _sock_buffer_add   (sock_buffer_t *buffer, void *data, int32_t size);
@@ -91,11 +91,17 @@ void    _sock_buffer_submit(sock_buffer_t *buffer);
 
 ///////////////////////////////////////////
 
+typedef enum sock_conn_type_ {
+	sock_conn_type_free,
+	sock_conn_type_client,
+	sock_conn_type_primary,
+} sock_conn_type_;
+
 typedef struct sock_conn_t {
-	bool          connected;
-	SOCKET        sock;
-	sock_buffer_t in_buffer;
-	sock_buffer_t out_buffer;
+	sock_conn_type_ type;
+	SOCKET          sock;
+	sock_buffer_t   in_buffer;
+	sock_buffer_t   out_buffer;
 } sock_conn_t;
 
 typedef struct sock_conn_event_t {
@@ -104,16 +110,13 @@ typedef struct sock_conn_event_t {
 } sock_conn_event_t;
 
 WSADATA sock_wsadata = {};
-SOCKET  sock_primary = INVALID_SOCKET;
 bool    sock_server  = false;
 void  (*sock_on_receive_callback   )(sock_header_t header, const void *data);
 void  (*sock_on_connection_callback)(sock_connection_id id, sock_connect_status_ status);
 
-sock_conn_t        sock_conns[FD_MAX_EVENTS-1];
+sock_conn_t        sock_conns[FD_MAX_EVENTS];
 int32_t            sock_conn_count = 0;
-sock_connection_id sock_self_id = -2;
-sock_buffer_t      sock_primary_in_buffer  = {};
-sock_buffer_t      sock_primary_out_buffer = {};
+sock_connection_id sock_self_id = -1;
 
 ///////////////////////////////////////////
 
@@ -124,8 +127,6 @@ int32_t _sock_init() {
 	if (WSAStartup(MAKEWORD(2,2), &sock_wsadata) != 0) {
 		return -1;
 	}
-	_sock_buffer_create(&sock_primary_in_buffer);
-	_sock_buffer_create(&sock_primary_out_buffer);
 	return 1;
 }
 
@@ -137,7 +138,7 @@ void sock_shutdown() {
 	sock_header_t     *header = (sock_header_t    *)&msg[0];
 	sock_conn_event_t *evt    = (sock_conn_event_t*)&msg[sizeof(sock_header_t)];
 	header->from      = sock_self_id;
-	header->to        = -2;
+	header->to        = -1;
 	header->data_id   = sock_type_id(sock_conn_event_t);
 	header->data_size = sizeof(sock_conn_event_t);
 	evt->id     = sock_self_id;
@@ -149,18 +150,15 @@ void sock_shutdown() {
 	// Notify and shut down client connections
 	if (sock_server) {
 		for (int32_t i = 0; i < _countof(sock_conns); i++) {
-			if (sock_conns[i].connected) {
+			if (sock_conns[i].type == sock_conn_type_client) {
 				send(sock_conns[i].sock, (char *)&msg[0], _countof(msg), 0);
 				_sock_connection_close(i, false);
 			}
 		}
 	}
 	
-	if (sock_primary != INVALID_SOCKET) closesocket(sock_primary);
-	sock_primary = INVALID_SOCKET;
-
-	_sock_buffer_free(&sock_primary_in_buffer);
-	_sock_buffer_free(&sock_primary_out_buffer);
+	// Close down the primary socket
+	_sock_connection_close(sock_self_id, false);
 
 	WSACleanup();
 	sock_wsadata = {};
@@ -169,21 +167,22 @@ void sock_shutdown() {
 ///////////////////////////////////////////
 
 void _sock_connection_close(sock_connection_id id, bool notify) {
-	if (sock_conns[id].connected) {
-		shutdown   (sock_conns[id].sock, SD_SEND);
-		closesocket(sock_conns[id].sock);
-		_sock_buffer_free(&sock_conns[id].in_buffer);
-		_sock_buffer_free(&sock_conns[id].out_buffer);
-		sock_conns[id].sock       = INVALID_SOCKET;
-		sock_conns[id].connected  = false;
-		sock_conn_count -= 1;
+	if (sock_conns[id].type == sock_conn_type_free)
+		return;
 
-		if (notify) {
-			sock_conn_event_t evt = {};
-			evt.id     = id;
-			evt.status = sock_connect_status_left;
-			sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
-		}
+	shutdown   (sock_conns[id].sock, SD_SEND);
+	closesocket(sock_conns[id].sock);
+	_sock_buffer_free(&sock_conns[id].in_buffer );
+	_sock_buffer_free(&sock_conns[id].out_buffer);
+	sock_conns[id].sock = INVALID_SOCKET;
+	sock_conns[id].type = sock_conn_type_free;
+	sock_conn_count -= 1;
+
+	if (notify) {
+		sock_conn_event_t evt = {};
+		evt.id     = id;
+		evt.status = sock_connect_status_left;
+		sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
 	}
 }
 
@@ -219,7 +218,7 @@ void sock_send(uint32_t data_id, int32_t data_size, const void *data) {
 	header.data_id   = data_id;
 	header.data_size = data_size;
 	header.from      = sock_self_id;
-	header.to        = -2;
+	header.to        = -1;
 	_sock_send_ex(header, data);
 }
 
@@ -243,25 +242,26 @@ void _sock_send_ex(sock_header_t header, const void *data) {
 	memcpy(&message[1], data, header.data_size);
 
 	if (sock_server) {
-		if (message->to == -2) {
+		if (message->to == -1) {
 			// Send to all connected clients
 			int32_t count = 0;
 			for (int32_t i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
-				if (!sock_conns[i].connected) continue;
+				if (sock_conns[i].type == sock_conn_type_free) continue;
 				count += 1;
+				if (sock_conns[i].type == sock_conn_type_primary) continue;
 				if (i == message->from) continue;
 				_sock_buffer_add(&sock_conns[i].out_buffer, message, msg_size);
 			}
 		} else {
 			// Send to specific connection
-			if (message->to >= 0 && message->to < _countof(sock_conns) && sock_conns[message->to].connected) {
+			if (message->to >= 0 && message->to < _countof(sock_conns) && sock_conns[message->to].type == sock_conn_type_client) {
 				_sock_buffer_add(&sock_conns[message->to].out_buffer, message, msg_size);
 			}
 		}
 	} else {
-		_sock_buffer_add(&sock_primary_out_buffer, message, msg_size);
+		_sock_buffer_add(&sock_conns[sock_self_id].out_buffer, message, msg_size);
 	}
-
+	
 	// send to self
 	_sock_on_receive(*message, &message[1]);
 	free(message);
@@ -272,8 +272,6 @@ void _sock_send_ex(sock_header_t header, const void *data) {
 int32_t sock_start_server(uint16_t port) {
 	int32_t result = _sock_init();
 	if (!result) return result;
-
-	sock_server = true;
 
 	char      port_str[32];
 	addrinfo *address = nullptr;
@@ -293,15 +291,22 @@ int32_t sock_start_server(uint16_t port) {
 	
 	// create, bind, and begin listening on the socket
 	result = 1;
-	sock_primary = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-	if (sock_primary == INVALID_SOCKET
-		|| bind  (sock_primary, address->ai_addr, (int)address->ai_addrlen) == SOCKET_ERROR
-		|| listen(sock_primary, SOMAXCONN                                 ) == SOCKET_ERROR) {
+	SOCKET sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+	if (sock == INVALID_SOCKET
+		|| bind  (sock, address->ai_addr, (int)address->ai_addrlen) == SOCKET_ERROR
+		|| listen(sock, SOMAXCONN                                 ) == SOCKET_ERROR) {
 		result = -2;
 	}
 	
 	freeaddrinfo(address);
-	sock_self_id = -1;
+
+	sock_server  = true;
+	sock_self_id = 0;
+	sock_conns[sock_self_id].sock = sock;
+	sock_conns[sock_self_id].type = sock_conn_type_primary;
+	_sock_buffer_create(&sock_conns[sock_self_id].in_buffer);
+	_sock_buffer_create(&sock_conns[sock_self_id].out_buffer);
+	sock_conn_count += 1;
 
 	// Notify everyone (mostly just self) of the new connection
 	sock_conn_event_t evt = {};
@@ -318,8 +323,6 @@ int32_t sock_start_client(const char *ip, uint16_t port) {
 	int32_t result = _sock_init();
 	if (!result) return result;
 
-	sock_server = false;
-
 	char      port_str[32];
 	addrinfo *address = nullptr;
 	addrinfo  hints;
@@ -335,22 +338,29 @@ int32_t sock_start_client(const char *ip, uint16_t port) {
 	if (getaddrinfo(ip, port_str, &hints, &address) != 0)
 		return -2;
 
-	sock_primary = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-	if (sock_primary == INVALID_SOCKET) {
+	SOCKET sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+	if (sock == INVALID_SOCKET) {
 		freeaddrinfo(address);
 		return -2;
 	}
-	if (connect(sock_primary, address->ai_addr, (int)address->ai_addrlen) == SOCKET_ERROR) {
-		closesocket(sock_primary);
-		sock_primary = INVALID_SOCKET;
+	if (connect(sock, address->ai_addr, (int)address->ai_addrlen) == SOCKET_ERROR) {
+		closesocket(sock);
+		sock = INVALID_SOCKET;
 	}
 	freeaddrinfo(address);
-	if (sock_primary == INVALID_SOCKET) {
+	if (sock == INVALID_SOCKET) {
 		return -3;
 	}
 
 	// get a connection id from the server
-	recv(sock_primary, (char*)&sock_self_id, sizeof(int32_t), 0);
+	recv(sock, (char*)&sock_self_id, sizeof(int32_t), 0);
+
+	sock_server = false;
+	sock_conns[sock_self_id].sock = sock;
+	sock_conns[sock_self_id].type = sock_conn_type_primary;
+	_sock_buffer_create(&sock_conns[sock_self_id].in_buffer);
+	_sock_buffer_create(&sock_conns[sock_self_id].out_buffer);
+	sock_conn_count += 1;
 
 	return 1;
 }
@@ -360,14 +370,14 @@ int32_t sock_start_client(const char *ip, uint16_t port) {
 int32_t _sock_server_new_connection() {
 	sockaddr_in address;
 	int32_t     address_size = sizeof(sockaddr_in);
-	SOCKET      new_client   = accept(sock_primary, (sockaddr*)&address, &address_size);
+	SOCKET      new_client   = accept(sock_conns[sock_self_id].sock, (sockaddr*)&address, &address_size);
 	if (new_client == INVALID_SOCKET)
 		return -1;
 
 	// Find a free slot in our connections
 	sock_connection_id id = -1;
 	for (sock_connection_id i = 0; i < _countof(sock_conns); i++) {
-		if (sock_conns[i].connected == false) {
+		if (sock_conns[i].type == sock_conn_type_free) {
 			id = i;
 			break;
 		}
@@ -376,7 +386,7 @@ int32_t _sock_server_new_connection() {
 	// store the connection
 	if (id != -1) {
 		sock_conns[id].sock = new_client;
-		sock_conns[id].connected = true;
+		sock_conns[id].type = sock_conn_type_client;
 		_sock_buffer_create(&sock_conns[id].in_buffer);
 		_sock_buffer_create(&sock_conns[id].out_buffer);
 		sock_conn_count += 1;
@@ -442,11 +452,9 @@ bool _sock_server_poll() {
 	FD_ZERO(&fd_read);
 	FD_ZERO(&fd_write);
 	FD_ZERO(&fd_except);
-	FD_SET(sock_primary, &fd_read);
-	FD_SET(sock_primary, &fd_except);
 	int32_t count = 0;
 	for (sock_connection_id i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
-		if (!sock_conns[i].connected) continue;
+		if (sock_conns[i].type == sock_conn_type_free) continue;
 		count += 1;
 		FD_SET(sock_conns[i].sock, &fd_except);
 		if (sock_conns[i].in_buffer .curr < sock_conns[i].in_buffer.size) FD_SET(sock_conns[i].sock, &fd_read);
@@ -457,47 +465,49 @@ bool _sock_server_poll() {
 	// ready for read/write/exception information
 	timeval time = {};
 	if (select(0, &fd_read, &fd_write, &fd_except, &time) > 0) {
-		// Check for connecting clients
-		if (FD_ISSET(sock_primary, &fd_except)) {
-			result = false;
-			printf("primary socket failed with error: %d\n", WSAGetLastError());
-			FD_CLR(sock_primary, &fd_except);
-		} else if (FD_ISSET(sock_primary, &fd_read)) {
-			_sock_server_new_connection();
-			FD_CLR(sock_primary, &fd_read);
-		}
-
-		// Receive and send data to any client that's got something
+		
 		count = 0;
 		for (sock_connection_id i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
 			sock_conn_t &conn = sock_conns[i];
-			if (!conn.connected)
-				continue;
+			if (conn.type == sock_conn_type_free) continue;
 			count += 1;
 
-			if (FD_ISSET(conn.sock, &fd_except)) {
-				_sock_connection_close(i, true);
-				FD_CLR(conn.sock, &fd_except);
-			} else {
-				if (FD_ISSET(conn.sock, &fd_read)) {
-					data_size = recv(conn.sock, &conn.in_buffer.data[conn.in_buffer.curr], conn.in_buffer.size - conn.in_buffer.curr, 0);
+			if (conn.type == sock_conn_type_primary) {
+				// Check for connecting clients
+				if (FD_ISSET(conn.sock, &fd_except)) {
+					result = false;
+					printf("primary socket failed with error: %d\n", WSAGetLastError());
+					FD_CLR(conn.sock, &fd_except);
+				} else if (FD_ISSET(conn.sock, &fd_read)) {
+					_sock_server_new_connection();
 					FD_CLR(conn.sock, &fd_read);
-					if (data_size < 1) {
-						if (data_size < 0)
-							printf("recv failed with error: %d\n", WSAGetLastError());
-						_sock_connection_close(i, true);
-					} else {
-						conn.in_buffer.curr += data_size;
-						_sock_buffer_submit(&conn.in_buffer);
-					}
 				}
-				if (FD_ISSET(conn.sock, &fd_write)) {
-					if (conn.out_buffer.curr > 0) {
-						if (send(conn.sock, conn.out_buffer.data, conn.out_buffer.curr, 0) == SOCKET_ERROR)
-							printf("send failed with error: %d\n", WSAGetLastError());
-						conn.out_buffer.curr = 0;
+			} else {
+				// Receive and send data to any client that's got something
+				if (FD_ISSET(conn.sock, &fd_except)) {
+					_sock_connection_close(i, true);
+					FD_CLR(conn.sock, &fd_except);
+				} else {
+					if (FD_ISSET(conn.sock, &fd_read)) {
+						data_size = recv(conn.sock, &conn.in_buffer.data[conn.in_buffer.curr], conn.in_buffer.size - conn.in_buffer.curr, 0);
+						FD_CLR(conn.sock, &fd_read);
+						if (data_size < 1) {
+							if (data_size < 0)
+								printf("recv failed with error: %d\n", WSAGetLastError());
+							_sock_connection_close(i, true);
+						} else {
+							conn.in_buffer.curr += data_size;
+							_sock_buffer_submit(&conn.in_buffer);
+						}
 					}
-					FD_CLR(conn.sock, &fd_write);
+					if (FD_ISSET(conn.sock, &fd_write)) {
+						if (conn.out_buffer.curr > 0) {
+							if (send(conn.sock, conn.out_buffer.data, conn.out_buffer.curr, 0) == SOCKET_ERROR)
+								printf("send failed with error: %d\n", WSAGetLastError());
+							conn.out_buffer.curr = 0;
+						}
+						FD_CLR(conn.sock, &fd_write);
+					}
 				}
 			}
 		}
@@ -509,43 +519,46 @@ bool _sock_server_poll() {
 ///////////////////////////////////////////
 
 bool _sock_client_poll() {
-	int32_t data_size = 0;
-	bool    result = true;
+	sock_conn_t &conn      = sock_conns[sock_self_id];
+	int32_t      data_size = 0;
+	bool         result    = true;
 
 	static fd_set fd_read, fd_write, fd_except;
 	FD_ZERO(&fd_read);
 	FD_ZERO(&fd_write);
 	FD_ZERO(&fd_except);
 
-	FD_SET(sock_primary, &fd_except);
-	FD_SET(sock_primary, &fd_read);
-	FD_SET(sock_primary, &fd_write);
+	FD_SET(conn.sock, &fd_except);
+	FD_SET(conn.sock, &fd_read);
+	FD_SET(conn.sock, &fd_write);
 
 	timeval time = {};
 	if (select(0, &fd_read, &fd_write, &fd_except, &time) > 0) {
-		if (FD_ISSET(sock_primary, &fd_except)) {
+		
+
+		if (FD_ISSET(conn.sock, &fd_except)) {
 			printf("primary socket failed with error: %d\n", WSAGetLastError());
 			result = false;
-			FD_CLR(sock_primary, &fd_except);
+			FD_CLR(conn.sock, &fd_except);
 		} else {
-			if (FD_ISSET(sock_primary, &fd_read)) {
-				data_size = recv(sock_primary, (char*)&sock_primary_in_buffer.data[sock_primary_in_buffer.curr], sock_primary_in_buffer.size - sock_primary_in_buffer.curr, 0);
+			if (FD_ISSET(conn.sock, &fd_read)) {
+				data_size = recv(conn.sock, (char*)&conn.in_buffer.data[conn.in_buffer.curr], conn.in_buffer.size - conn.in_buffer.curr, 0);
 				if (data_size < 0) {
 					printf("recv failed with error: %d\n", WSAGetLastError());
 					result = false;
 				} else {
-					sock_primary_in_buffer.curr += data_size;
-					_sock_buffer_submit(&sock_primary_in_buffer);
+					conn.in_buffer.curr += data_size;
+					_sock_buffer_submit(&conn.in_buffer);
 				}
-				FD_CLR(sock_primary, &fd_read);
+				FD_CLR(conn.sock, &fd_read);
 			}
-			if (FD_ISSET(sock_primary, &fd_write)) {
-				if (sock_primary_out_buffer.curr > 0) {
-					if (send(sock_primary, sock_primary_out_buffer.data, sock_primary_out_buffer.curr, 0) == SOCKET_ERROR)
+			if (FD_ISSET(conn.sock, &fd_write)) {
+				if (conn.out_buffer.curr > 0) {
+					if (send(conn.sock, conn.out_buffer.data, conn.out_buffer.curr, 0) == SOCKET_ERROR)
 						printf("send failed with error: %d\n", WSAGetLastError());
-					sock_primary_out_buffer.curr = 0;
+					conn.out_buffer.curr = 0;
 				}
-				FD_CLR(sock_primary, &fd_write);
+				FD_CLR(conn.sock, &fd_write);
 			}
 		}
 	}
@@ -565,7 +578,7 @@ bool sock_poll() {
 ///////////////////////////////////////////
 
 void _sock_on_receive(sock_header_t header, const void *data) {
-	if (header.to != -2 && header.to != sock_self_id)
+	if (header.to != -1 && header.to != sock_self_id)
 		return;
 
 	if (header.data_id == sock_type_id(sock_conn_event_t)) {
@@ -601,6 +614,8 @@ void sock_on_receive(void (*on_receive)(sock_header_t header, const void *data))
 void sock_on_connection(void (*on_connection)(sock_connection_id id, sock_connect_status_ status)) {
 	sock_on_connection_callback = on_connection;
 }
+
+///////////////////////////////////////////
 
 #endif
 
