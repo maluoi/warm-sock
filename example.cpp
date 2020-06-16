@@ -40,7 +40,7 @@ int main() {
 
 void on_receive(sock_header_t header, void *data) {
 	switch (header.data_id) {
-	case 1: {
+	case sock_type_id_str("string"): {
 		printf("#%d - %s\n", header.from, (char*)data);
 	} break;
 	default: break;
@@ -57,7 +57,7 @@ void type_message() {
 		_putch(ch);
 		if (ch == '\r' || curr == (_countof(msg)-1)) {
 			msg[curr] = '\0';
-			sock_send(1, curr+1, &msg);
+			sock_send(sock_type_id_str("string"), curr+1, &msg);
 			curr = 0;
 		} else {
 			msg[curr] = ch;

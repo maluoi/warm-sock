@@ -46,6 +46,18 @@ bool    sock_is_server   ();
 
 ///////////////////////////////////////////
 
+// Compile time string hashing for data type ids 
+// see: http://lolengine.net/blog/2011/12/20/cpp-constant-string-hash
+#define _sock_H1(s,i,x)   (x*65599u+(uint8_t)s[(i)<(sizeof(s)-1)?(sizeof(s)-1)-1-(i):(sizeof(s)-1)])
+#define _sock_H4(s,i,x)   _sock_H1(s,i,_sock_H1(s,i+1,_sock_H1(s,i+2,_sock_H1(s,i+3,x))))
+#define _sock_H16(s,i,x)  _sock_H4(s,i,_sock_H4(s,i+4,_sock_H4(s,i+8,_sock_H4(s,i+12,x))))
+#define _sock_H64(s,i,x)  _sock_H16(s,i,_sock_H16(s,i+16,_sock_H16(s,i+32,_sock_H16(s,i+48,x))))
+
+#define sock_type_id_str(str) ((uint32_t)(_sock_H64(str,0,0)^(_sock_H64(str,0,0)>>16)))
+#define sock_type_id(type) sock_type_id_str(#type)
+
+///////////////////////////////////////////
+
 #ifdef WARM_SOCK_IMPL
 
 #include <winsock2.h>
