@@ -36,12 +36,12 @@ typedef struct sock_header_t {
 
 ///////////////////////////////////////////
 
-int32_t sock_start_server(const char *port);
-int32_t sock_start_client(const char *ip, const char *port);
+int32_t sock_start_server(uint16_t port);
+int32_t sock_start_client(const char *ip, uint16_t port);
 void    sock_shutdown    ();
-void    sock_send        (int32_t data_id, int32_t data_size, void *data);
+void    sock_send        (int32_t data_id, int32_t data_size, const void *data);
 bool    sock_poll        ();
-void    sock_listen      (void (*on_receive)(sock_header_t header, void *data));
+void    sock_listen      (void (*on_receive)(sock_header_t header, const void *data));
 bool    sock_is_server   ();
 
 ///////////////////////////////////////////
@@ -69,8 +69,8 @@ bool    sock_is_server   ();
 ///////////////////////////////////////////
 
 int32_t _sock_init();
-void    _sock_on_receive(sock_header_t header, void *data);
-void    _sock_send_from (sock_header_t header, void *data);
+void    _sock_on_receive(sock_header_t header, const void *data);
+void    _sock_send_from (sock_header_t header, const void *data);
 void    _sock_connection_close(sock_connection_id id);
 int32_t _sock_server_connect();
 bool    _sock_server_poll();
@@ -92,7 +92,7 @@ typedef struct sock_conn_t {
 WSADATA sock_wsadata = {};
 SOCKET  sock_primary = INVALID_SOCKET;
 bool    sock_server  = false;
-void  (*sock_on_receive_callback)(sock_header_t header, void *data);
+void  (*sock_on_receive_callback)(sock_header_t header, const void *data);
 
 sock_conn_t        sock_conns[FD_MAX_EVENTS-1];
 int32_t            sock_conn_count = 0;
@@ -173,7 +173,7 @@ void _sock_buffer_add(sock_buffer_t *buffer, void *data, int32_t size) {
 
 ///////////////////////////////////////////
 
-void sock_send(int32_t data_id, int32_t data_size, void *data) {
+void sock_send(int32_t data_id, int32_t data_size, const void *data) {
 	sock_header_t header;
 	header.data_id   = data_id;
 	header.data_size = data_size;
@@ -183,7 +183,7 @@ void sock_send(int32_t data_id, int32_t data_size, void *data) {
 
 ///////////////////////////////////////////
 
-void _sock_send_from(sock_header_t header, void *data) {
+void _sock_send_from(sock_header_t header, const void *data) {
 	int32_t        msg_size = header.data_size + sizeof(sock_header_t);
 	sock_header_t *message  = (sock_header_t*)malloc(msg_size);
 	*message = header;
@@ -209,14 +209,18 @@ void _sock_send_from(sock_header_t header, void *data) {
 
 ///////////////////////////////////////////
 
-int32_t sock_start_server(const char *port) {
+int32_t sock_start_server(uint16_t port) {
 	int32_t result = _sock_init();
 	if (!result) return result;
 
 	sock_server = true;
 
+	char      port_str[32];
 	addrinfo *address = nullptr;
 	addrinfo  hints;
+
+	// convert the port to a string
+	sprintf_s(port_str, "%hu", port);
 
 	// Create socket as server
 	hints = {};
@@ -224,7 +228,7 @@ int32_t sock_start_server(const char *port) {
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 	hints.ai_flags    = AI_PASSIVE;
-	if (getaddrinfo(nullptr, port, &hints, &address) != 0) 
+	if (getaddrinfo(nullptr, port_str, &hints, &address) != 0) 
 		return -1;
 	
 	// create, bind, and begin listening on the socket
@@ -250,21 +254,25 @@ bool sock_is_server() {
 
 ///////////////////////////////////////////
 
-int32_t sock_start_client(const char *ip, const char *port) {
+int32_t sock_start_client(const char *ip, uint16_t port) {
 	int32_t result = _sock_init();
 	if (!result) return result;
 
 	sock_server = false;
 
+	char      port_str[32];
 	addrinfo *address = nullptr;
 	addrinfo  hints;
+
+	// convert the port to a string
+	sprintf_s(port_str, "%hu", port);
 
 	// Create socket as client
 	hints = {};
 	hints.ai_family   = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
-	if (getaddrinfo(ip, port, &hints, &address) != 0)
+	if (getaddrinfo(ip, port_str, &hints, &address) != 0)
 		return -2;
 
 	sock_primary = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
@@ -356,6 +364,10 @@ void _sock_buffer_submit(sock_buffer_t *buffer) {
 
 ///////////////////////////////////////////
 
+// FD_SET has a warning built into it
+#pragma warning( push )
+#pragma warning( disable: 6319 )
+
 bool _sock_server_poll() {
 	static fd_set fd_read, fd_write, fd_except;
 
@@ -374,7 +386,7 @@ bool _sock_server_poll() {
 		count += 1;
 		FD_SET(sock_conns[i].sock, &fd_except);
 		if (sock_conns[i].in_buffer .curr < sock_conns[i].in_buffer.size) FD_SET(sock_conns[i].sock, &fd_read);
-		if (sock_conns[i].out_buffer.curr > 0                            ) FD_SET(sock_conns[i].sock, &fd_write);
+		if (sock_conns[i].out_buffer.curr > 0                           ) FD_SET(sock_conns[i].sock, &fd_write);
 	}
 
 	// 'select' will check all the FD_SET sockets to see if any of them are
@@ -475,6 +487,8 @@ bool _sock_client_poll() {
 	return result;
 }
 
+#pragma warning( pop )
+
 ///////////////////////////////////////////
 
 bool sock_poll() {
@@ -485,14 +499,14 @@ bool sock_poll() {
 
 ///////////////////////////////////////////
 
-void _sock_on_receive(sock_header_t header, void *data) {
+void _sock_on_receive(sock_header_t header, const void *data) {
 	if (sock_on_receive_callback)
 		sock_on_receive_callback(header, data);
 }
 
 ///////////////////////////////////////////
 
-void sock_listen(void (*on_receive)(sock_header_t header, void *data)) {
+void sock_listen(void (*on_receive)(sock_header_t header, const void *data)) {
 	sock_on_receive_callback = on_receive;
 }
 
