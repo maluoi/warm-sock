@@ -16,10 +16,10 @@ int main() {
 	// Start as either a server, or a client based on the project #defines
 #ifdef WARM_SOCK_SERVER
 	printf("Starting server:\n");
-	if (!sock_start_server()) return 0;
+	if (!sock_start_server("27015")) return 0;
 #else
 	printf("Starting client:\n");
-	if (!sock_start_client("127.0.0.1")) return 0;
+	if (!sock_start_client("127.0.0.1", "27015")) return 0;
 #endif
 
 	// Set up our callback function
@@ -57,7 +57,7 @@ void type_message() {
 		_putch(ch);
 		if (ch == '\r' || curr == (_countof(msg)-1)) {
 			msg[curr] = '\0';
-			sock_send(1, &msg, curr+1);
+			sock_send(1, curr+1, &msg);
 			curr = 0;
 		} else {
 			msg[curr] = ch;

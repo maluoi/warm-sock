@@ -22,24 +22,24 @@ References:
 
 typedef int16_t sock_connection_id;
 
-struct sock_buffer_t {
+typedef struct sock_buffer_t {
 	char   *data;
 	int32_t size;
 	int32_t curr;
-};
+} sock_buffer_t;
 
-struct sock_header_t {
+typedef struct sock_header_t {
 	int32_t            data_id;
 	int32_t            data_size;
 	sock_connection_id from;
-};
+} sock_header_t;
 
 ///////////////////////////////////////////
 
-int32_t sock_start_server(const char *port = "27015");
-int32_t sock_start_client(const char *ip, const char *port = "27015");
+int32_t sock_start_server(const char *port);
+int32_t sock_start_client(const char *ip, const char *port);
 void    sock_shutdown    ();
-void    sock_send        (int32_t data_id, void *data, int32_t data_size, sock_connection_id force_from = -2);
+void    sock_send        (int32_t data_id, int32_t data_size, void *data);
 bool    sock_poll        ();
 void    sock_listen      (void (*on_receive)(sock_header_t header, void *data));
 bool    sock_is_server   ();
@@ -58,31 +58,32 @@ bool    sock_is_server   ();
 
 int32_t _sock_init();
 void    _sock_on_receive(sock_header_t header, void *data);
+void    _sock_send_from (sock_header_t header, void *data);
 void    _sock_connection_close(sock_connection_id id);
 int32_t _sock_server_connect();
 bool    _sock_server_poll();
 bool    _sock_client_poll();
-void    _sock_buffer_create(sock_buffer_t &buffer);
-void    _sock_buffer_free  (sock_buffer_t &buffer);
-void    _sock_buffer_add   (sock_buffer_t &buffer, void *data, int32_t size);
-void    _sock_buffer_submit(sock_buffer_t &buffer);
+void    _sock_buffer_create(sock_buffer_t *buffer);
+void    _sock_buffer_free  (sock_buffer_t *buffer);
+void    _sock_buffer_add   (sock_buffer_t *buffer, void *data, int32_t size);
+void    _sock_buffer_submit(sock_buffer_t *buffer);
 
 ///////////////////////////////////////////
 
-struct connection_t {
+typedef struct sock_conn_t {
 	bool          connected;
 	SOCKET        sock;
 	sock_buffer_t in_buffer;
 	sock_buffer_t out_buffer;
-};
+} sock_conn_t;
 
 WSADATA sock_wsadata = {};
 SOCKET  sock_primary = INVALID_SOCKET;
-bool    sock_server = false;
+bool    sock_server  = false;
 void  (*sock_on_receive_callback)(sock_header_t header, void *data);
 
-connection_t       sock_conns[FD_MAX_EVENTS-1];
-int32_t            sock_conn_count;
+sock_conn_t        sock_conns[FD_MAX_EVENTS-1];
+int32_t            sock_conn_count = 0;
 sock_connection_id sock_self_id = -2;
 sock_buffer_t      sock_primary_in_buffer  = {};
 sock_buffer_t      sock_primary_out_buffer = {};
@@ -96,8 +97,8 @@ int32_t _sock_init() {
 	if (WSAStartup(MAKEWORD(2,2), &sock_wsadata) != 0) {
 		return -1;
 	}
-	_sock_buffer_create(sock_primary_in_buffer);
-	_sock_buffer_create(sock_primary_out_buffer);
+	_sock_buffer_create(&sock_primary_in_buffer);
+	_sock_buffer_create(&sock_primary_out_buffer);
 	return 1;
 }
 
@@ -112,8 +113,8 @@ void sock_shutdown() {
 	if (sock_primary != INVALID_SOCKET) closesocket(sock_primary);
 	sock_primary = INVALID_SOCKET;
 
-	_sock_buffer_free(sock_primary_in_buffer);
-	_sock_buffer_free(sock_primary_out_buffer);
+	_sock_buffer_free(&sock_primary_in_buffer);
+	_sock_buffer_free(&sock_primary_out_buffer);
 
 	WSACleanup();
 	sock_wsadata = {};
@@ -125,8 +126,8 @@ void _sock_connection_close(sock_connection_id id) {
 	if (sock_conns[id].connected) {
 		shutdown   (sock_conns[id].sock, SD_SEND);
 		closesocket(sock_conns[id].sock);
-		_sock_buffer_free(sock_conns[id].in_buffer);
-		_sock_buffer_free(sock_conns[id].out_buffer);
+		_sock_buffer_free(&sock_conns[id].in_buffer);
+		_sock_buffer_free(&sock_conns[id].out_buffer);
 		sock_conns[id].sock       = INVALID_SOCKET;
 		sock_conns[id].connected  = false;
 		sock_conn_count -= 1;
@@ -135,38 +136,46 @@ void _sock_connection_close(sock_connection_id id) {
 
 ///////////////////////////////////////////
 
-void _sock_buffer_create(sock_buffer_t &buffer) {
-	buffer = {};
-	buffer.size = SOCK_BUFFER_SIZE;
-	buffer.data = (char*)malloc(buffer.size);
+void _sock_buffer_create(sock_buffer_t *buffer) {
+	*buffer = {};
+	buffer->size = SOCK_BUFFER_SIZE;
+	buffer->data = (char*)malloc(buffer->size);
 }
 
 ///////////////////////////////////////////
 
-void _sock_buffer_free(sock_buffer_t &buffer) {
-	free(buffer.data);
-	buffer = {};
+void _sock_buffer_free(sock_buffer_t *buffer) {
+	free(buffer->data);
+	*buffer = {};
 }
 
 ///////////////////////////////////////////
-void _sock_buffer_add(sock_buffer_t &buffer, void *data, int32_t size) {
-	if (buffer.curr + size > buffer.size) {
+void _sock_buffer_add(sock_buffer_t *buffer, void *data, int32_t size) {
+	if (buffer->curr + size > buffer->size) {
 		printf("Out buffer is full!");
 		return;
 	}
-	memcpy(buffer.data, data, size);
-	buffer.curr += size;
+	memcpy(buffer->data, data, size);
+	buffer->curr += size;
 }
 
 ///////////////////////////////////////////
 
-void sock_send(int32_t data_id, void *data, int32_t data_size, sock_connection_id force_from) {
-	int32_t        msg_size = data_size + sizeof(sock_header_t);
+void sock_send(int32_t data_id, int32_t data_size, void *data) {
+	sock_header_t header;
+	header.data_id   = data_id;
+	header.data_size = data_size;
+	header.from      = sock_self_id;
+	_sock_send_from(header, data);
+}
+
+///////////////////////////////////////////
+
+void _sock_send_from(sock_header_t header, void *data) {
+	int32_t        msg_size = header.data_size + sizeof(sock_header_t);
 	sock_header_t *message  = (sock_header_t*)malloc(msg_size);
-	message->data_id   = data_id;
-	message->data_size = data_size;
-	message->from      = force_from == -2 ? sock_self_id : force_from;
-	memcpy(&message[1], data, data_size);
+	*message = header;
+	memcpy(&message[1], data, header.data_size);
 
 	if (sock_server) {
 		int32_t count = 0;
@@ -175,10 +184,10 @@ void sock_send(int32_t data_id, void *data, int32_t data_size, sock_connection_i
 			if (!sock_conns[i].connected) continue;
 			count += 1;
 			if (i == message->from) continue;
-			_sock_buffer_add(sock_conns[i].out_buffer, message, msg_size);
+			_sock_buffer_add(&sock_conns[i].out_buffer, message, msg_size);
 		}
 	} else {
-		_sock_buffer_add(sock_primary_out_buffer, message, msg_size);
+		_sock_buffer_add(&sock_primary_out_buffer, message, msg_size);
 	}
 
 	// send to self
@@ -289,8 +298,8 @@ int32_t _sock_server_connect() {
 	if (id != -1) {
 		sock_conns[id].sock = new_client;
 		sock_conns[id].connected = true;
-		_sock_buffer_create(sock_conns[id].in_buffer);
-		_sock_buffer_create(sock_conns[id].out_buffer);
+		_sock_buffer_create(&sock_conns[id].in_buffer);
+		_sock_buffer_create(&sock_conns[id].out_buffer);
 		printf("New connection #%d\n", id); // inet_ntoa(address.sin_addr)
 		sock_conn_count += 1;
 	} else {
@@ -312,20 +321,20 @@ int32_t _sock_server_connect() {
 
 ///////////////////////////////////////////
 
-void _sock_buffer_submit(sock_buffer_t &buffer) {
-	sock_header_t *head   = (sock_header_t*)buffer.data;
+void _sock_buffer_submit(sock_buffer_t *buffer) {
+	sock_header_t *head   = (sock_header_t*)buffer->data;
 	int32_t        length = head->data_size + sizeof(sock_header_t);
-	while (buffer.curr >= length) {
+	while (buffer->curr >= length) {
 		if (sock_server) {
-			sock_send(head->data_id, &head[1], head->data_size, head->from);
+			_sock_send_from(*head, &head[1]);
 		} else {
 			_sock_on_receive(*head, &head[1]);
 		}
-		memmove(buffer.data, &buffer.data[length], buffer.curr - length);
-		buffer.curr -= length;
+		memmove(buffer->data, &buffer->data[length], (size_t)buffer->curr - (size_t)length);
+		buffer->curr -= length;
 
-		if (buffer.curr > sizeof(sock_header_t)) {
-			head = (sock_header_t *)buffer.data;
+		if (buffer->curr > sizeof(sock_header_t)) {
+			head = (sock_header_t *)buffer->data;
 			length = head->data_size + sizeof(sock_header_t);
 		} else {
 			break;
@@ -373,7 +382,7 @@ bool _sock_server_poll() {
 		// Receive and send data to any client that's got something
 		count = 0;
 		for (sock_connection_id i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
-			connection_t &conn = sock_conns[i];
+			sock_conn_t &conn = sock_conns[i];
 			if (!conn.connected)
 				continue;
 			count += 1;
@@ -390,7 +399,7 @@ bool _sock_server_poll() {
 						_sock_connection_close(i);
 					} else {
 						conn.in_buffer.curr += data_size;
-						_sock_buffer_submit(conn.in_buffer);
+						_sock_buffer_submit(&conn.in_buffer);
 					}
 				}
 				if (FD_ISSET(conn.sock, &fd_write)) {
@@ -437,7 +446,7 @@ bool _sock_client_poll() {
 					result = false;
 				} else {
 					sock_primary_in_buffer.curr += data_size;
-					_sock_buffer_submit(sock_primary_in_buffer);
+					_sock_buffer_submit(&sock_primary_in_buffer);
 				}
 				FD_CLR(sock_primary, &fd_read);
 			}
