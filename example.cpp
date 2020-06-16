@@ -14,14 +14,21 @@ struct test_data_t {
 	float direction[3];
 };
 
+bool app_run = true;
+
 ///////////////////////////////////////////
 
-void on_receive(sock_header_t header, const void *data);
+void on_connection(sock_connection_id id, sock_connect_status_ status);
+void on_receive   (sock_header_t header, const void *data);
 void check_input();
 
 ///////////////////////////////////////////
 
 int main() {
+	// Set up our callback functions
+	sock_on_receive   (on_receive);
+	sock_on_connection(on_connection);
+
 	// Start as either a server, or a client based on the project #defines
 #ifdef WARM_SOCK_SERVER
 	printf("Starting server:\n");
@@ -31,17 +38,34 @@ int main() {
 	if (!sock_start_client("127.0.0.1", 27015)) return 0;
 #endif
 
-	// Set up our callback function
-	sock_listen(on_receive);
-
 	// Poll for network events until it crashes, or we get bored!
-	while (sock_poll()) {
+	while (app_run && sock_poll()) {
 		check_input();
 		Sleep(1);
 	}
 
 	sock_shutdown();
 	return 1;
+}
+
+///////////////////////////////////////////
+
+void on_connection(sock_connection_id id, sock_connect_status_ status) {
+	if (id == sock_get_id()) {
+		printf(status == sock_connect_status_joined
+			? "Connected to server as #%d.\n"
+			: "Disconnected from server.\n", id);
+		return;
+	}
+
+	if (status == sock_connect_status_joined) {
+		printf("#%d has joined the session\n", id);
+		char message[128];
+		sprintf_s(message, "Welcome from #%d!", sock_get_id());
+		sock_send_to(id, sock_type_id_str("string"), strlen(message)+1, &message[0]);
+	} else if (status == sock_connect_status_left) {
+		printf("#%d has left the session.\n", id);
+	}
 }
 
 ///////////////////////////////////////////
@@ -67,7 +91,9 @@ void check_input() {
 	
 	if (_kbhit() != 0) {
 		char ch = _getch();
-		if (ch == '1') {
+		if (ch == '`') {
+			app_run = false;
+		} if (ch == '1') {
 
 			// Send a message using a struct
 			test_data_t test = { {1, 2, 3}, {3, 2, 1} };
