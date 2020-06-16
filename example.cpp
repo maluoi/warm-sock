@@ -1,4 +1,11 @@
+#define WARM_SOCK_IMPL
 #include "warm_sock.h"
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // for Sleep
+#include <stdio.h>
+#include <conio.h> // for _kbhit
+#include <stdlib.h> // for _countof
 
 void on_receive(sock_header_t header, void *data);
 void type_message();
@@ -21,6 +28,7 @@ int main() {
 	// Poll for network events until it crashes, or we get bored!
 	while (sock_poll()) {
 		type_message();
+		
 		Sleep(1);
 	}
 
@@ -33,7 +41,7 @@ int main() {
 void on_receive(sock_header_t header, void *data) {
 	switch (header.data_id) {
 	case 1: {
-		printf("#%d - %s\n", header.from, data);
+		printf("#%d - %s\n", header.from, (char*)data);
 	} break;
 	default: break;
 	}

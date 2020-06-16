@@ -1,20 +1,22 @@
+/*Licensed under MIT or Public Domain. See bottom of file for details.
+
+warm_sock.h
+
+	In one file before including "warm_sock.h", be sure to #define 
+	WARM_SOCK_IMPL
+
+	#define WARM_SOCK_IMPL
+	#include "warm_sock.h"
+
+References:
+	https://docs.microsoft.com/en-us/windows/win32/winsock/sending-and-receiving-data-on-the-client
+	https://tangentsoft.net/wskfaq/examples/basics/select-server.html
+*/
+
 #pragma once
-
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-
-// References:
-// https://docs.microsoft.com/en-us/windows/win32/winsock/sending-and-receiving-data-on-the-client
-// https://tangentsoft.net/wskfaq/examples/basics/select-server.html
-
 #pragma comment(lib, "Ws2_32.lib")
 
 #include <stdint.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <stdio.h>
-#include <conio.h>
-
-#define SOCK_BUFFER_SIZE 1024
 
 ///////////////////////////////////////////
 
@@ -34,13 +36,25 @@ struct sock_header_t {
 
 ///////////////////////////////////////////
 
-void    sock_shutdown();
-void    sock_send(int32_t data_id, void *data, int32_t data_size, sock_connection_id force_from = -2);
 int32_t sock_start_server(const char *port = "27015");
 int32_t sock_start_client(const char *ip, const char *port = "27015");
-bool    sock_poll();
-void    sock_listen(void (*on_receive)(sock_header_t header, void *data));
-bool    sock_is_server();
+void    sock_shutdown    ();
+void    sock_send        (int32_t data_id, void *data, int32_t data_size, sock_connection_id force_from = -2);
+bool    sock_poll        ();
+void    sock_listen      (void (*on_receive)(sock_header_t header, void *data));
+bool    sock_is_server   ();
+
+///////////////////////////////////////////
+
+#ifdef WARM_SOCK_IMPL
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdio.h>
+
+#define SOCK_BUFFER_SIZE 1024
+
+///////////////////////////////////////////
 
 int32_t _sock_init();
 void    _sock_on_receive(sock_header_t header, void *data);
@@ -147,8 +161,8 @@ void _sock_buffer_add(sock_buffer_t &buffer, void *data, int32_t size) {
 ///////////////////////////////////////////
 
 void sock_send(int32_t data_id, void *data, int32_t data_size, sock_connection_id force_from) {
-	size_t msg_size = data_size + sizeof(sock_header_t);
-	sock_header_t *message = (sock_header_t*)malloc(msg_size);
+	int32_t        msg_size = data_size + sizeof(sock_header_t);
+	sock_header_t *message  = (sock_header_t*)malloc(msg_size);
 	message->data_id   = data_id;
 	message->data_size = data_size;
 	message->from      = force_from == -2 ? sock_self_id : force_from;
@@ -157,7 +171,7 @@ void sock_send(int32_t data_id, void *data, int32_t data_size, sock_connection_i
 	if (sock_server) {
 		int32_t count = 0;
 		// Send to all connected clients
-		for (size_t i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
+		for (int32_t i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
 			if (!sock_conns[i].connected) continue;
 			count += 1;
 			if (i == message->from) continue;
@@ -179,14 +193,6 @@ int32_t sock_start_server(const char *port) {
 	if (!result) return result;
 
 	sock_server = true;
-
-	/*sock_primary = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	sockaddr_in addr;
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	addr.sin_port = htons(27015);
-	bind(sock_primary, (SOCKADDR *)&addr, sizeof(addr));
-	listen(sock_primary, SOMAXCONN);*/
 
 	addrinfo *address = nullptr;
 	addrinfo  hints;
@@ -228,13 +234,6 @@ int32_t sock_start_client(const char *ip, const char *port) {
 	if (!result) return result;
 
 	sock_server = false;
-
-	/*sock_primary = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	sockaddr_in addr = {};
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = inet_addr( "127.0.0.1" );
-	addr.sin_port = htons( 27015 );
-	connect( sock_primary, (SOCKADDR*) &addr, sizeof(addr) );*/
 
 	addrinfo *address = nullptr;
 	addrinfo  hints;
@@ -278,21 +277,21 @@ int32_t _sock_server_connect() {
 		return -1;
 
 	// Find a free slot in our connections
-	int32_t connection_id = -1;
-	for (size_t i = 0; i < _countof(sock_conns); i++) {
+	sock_connection_id id = -1;
+	for (sock_connection_id i = 0; i < _countof(sock_conns); i++) {
 		if (sock_conns[i].connected == false) {
-			connection_id = i;
+			id = i;
 			break;
 		}
 	}
 
 	// store the connection
-	if (connection_id != -1) {
-		sock_conns[connection_id].sock = new_client;
-		sock_conns[connection_id].connected = true;
-		_sock_buffer_create(sock_conns[connection_id].in_buffer);
-		_sock_buffer_create(sock_conns[connection_id].out_buffer);
-		printf("New connection #%d\n", connection_id); // inet_ntoa(address.sin_addr)
+	if (id != -1) {
+		sock_conns[id].sock = new_client;
+		sock_conns[id].connected = true;
+		_sock_buffer_create(sock_conns[id].in_buffer);
+		_sock_buffer_create(sock_conns[id].out_buffer);
+		printf("New connection #%d\n", id); // inet_ntoa(address.sin_addr)
 		sock_conn_count += 1;
 	} else {
 		printf("Connections are full! Rejecting a new connection.\n");
@@ -306,7 +305,7 @@ int32_t _sock_server_connect() {
 	}
 
 	// Send the client its id
-	send(new_client, (char *)&connection_id, sizeof(int32_t), 0);
+	send(new_client, (char *)&id, sizeof(int32_t), 0);
 
 	return 1;
 }
@@ -315,7 +314,7 @@ int32_t _sock_server_connect() {
 
 void _sock_buffer_submit(sock_buffer_t &buffer) {
 	sock_header_t *head   = (sock_header_t*)buffer.data;
-	size_t         length = head->data_size + sizeof(sock_header_t);
+	int32_t        length = head->data_size + sizeof(sock_header_t);
 	while (buffer.curr >= length) {
 		if (sock_server) {
 			sock_send(head->data_id, &head[1], head->data_size, head->from);
@@ -349,7 +348,7 @@ bool _sock_server_poll() {
 	FD_SET(sock_primary, &fd_read);
 	FD_SET(sock_primary, &fd_except);
 	int32_t count = 0;
-	for (size_t i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
+	for (sock_connection_id i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
 		if (!sock_conns[i].connected) continue;
 		count += 1;
 		FD_SET(sock_conns[i].sock, &fd_except);
@@ -373,7 +372,7 @@ bool _sock_server_poll() {
 
 		// Receive and send data to any client that's got something
 		count = 0;
-		for (size_t i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
+		for (sock_connection_id i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
 			connection_t &conn = sock_conns[i];
 			if (!conn.connected)
 				continue;
@@ -475,3 +474,47 @@ void _sock_on_receive(sock_header_t header, void *data) {
 void sock_listen(void (*on_receive)(sock_header_t header, void *data)) {
 	sock_on_receive_callback = on_receive;
 }
+
+#endif
+
+/*
+------------------------------------------------------------------------------
+This software is available under 2 licenses -- choose whichever you prefer.
+------------------------------------------------------------------------------
+ALTERNATIVE A - MIT License
+Copyright (c) 2020 Nick Klingensmith
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+------------------------------------------------------------------------------
+ALTERNATIVE B - Public Domain (www.unlicense.org)
+This is free and unencumbered software released into the public domain.
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+software, either in source code form or as a compiled binary, for any purpose,
+commercial or non-commercial, and by any means.
+In jurisdictions that recognize copyright laws, the author or authors of this
+software dedicate any and all copyright interest in the software to the public
+domain. We make this dedication for the benefit of the public at large and to
+the detriment of our heirs and successors. We intend this dedication to be an
+overt act of relinquishment in perpetuity of all present and future rights to
+this software under copyright law.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+------------------------------------------------------------------------------
+*/
