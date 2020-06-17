@@ -29,16 +29,20 @@ int main() {
 	sock_on_receive   (on_receive);
 	sock_on_connection(on_connection);
 
-	// Start as either a server, or a client based on the project #defines
-#ifdef WARM_SOCK_SERVER
-	printf("Starting server:\n");
-	if (!sock_start_server(sock_hash("Warm sock example"), 27015)) return 0;
-#else
-	printf("Starting client:\n");
-	if (!sock_start_client(sock_hash("Warm sock example"), "127.0.0.1", 27015)) return 0;
-#endif
+	// Set up warm_sock
+	if (!sock_init(sock_hash("Warm sock example"), 27015)) return 0;
 
-	// Poll for network events until it crashes, or we get bored!
+	// Connect to a server if we find one. If not, make our own server!
+	char addr[32];
+	if (sock_find_server(addr, sizeof(addr))) {
+		printf("Connecting to server at %s\n", addr);
+		if (!sock_start_client(addr)) return 0;
+	} else {
+		printf("Starting a server!\n");
+		if (!sock_start_server()) return 0;
+	}
+
+	// Poll for network events until it crashes or we get bored!
 	while (app_run && sock_poll()) {
 		check_input();
 		Sleep(1);
