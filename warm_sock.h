@@ -42,8 +42,8 @@ typedef struct sock_header_t {
 
 ///////////////////////////////////////////
 
-int32_t sock_start_server (uint16_t port);
-int32_t sock_start_client (const char *ip, uint16_t port);
+int32_t sock_start_server (uint32_t app_id, uint16_t port);
+int32_t sock_start_client (uint32_t app_id, const char *ip, uint16_t port);
 void    sock_shutdown     ();
 void    sock_send         (uint32_t data_id, int32_t data_size, const void *data);
 void    sock_send_to      (sock_connection_id to, uint32_t data_id, int32_t data_size, const void *data);
@@ -62,8 +62,8 @@ sock_connection_id sock_get_id   ();
 #define _sock_H16(s,i,x)  _sock_H4(s,i,_sock_H4(s,i+4,_sock_H4(s,i+8,_sock_H4(s,i+12,x))))
 #define _sock_H64(s,i,x)  _sock_H16(s,i,_sock_H16(s,i+16,_sock_H16(s,i+32,_sock_H16(s,i+48,x))))
 
-#define sock_type_id_str(str) ((uint32_t)(_sock_H64(str,0,0)^(_sock_H64(str,0,0)>>16)))
-#define sock_type_id(type) sock_type_id_str(#type)
+#define sock_hash(str) ((uint32_t)(_sock_H64(str,0,0)^(_sock_H64(str,0,0)>>16)))
+#define sock_hash_type(type) sock_hash(#type)
 
 ///////////////////////////////////////////
 
@@ -109,6 +109,12 @@ typedef struct sock_conn_event_t {
 	sock_connect_status_ status;
 } sock_conn_event_t;
 
+typedef struct sock_initial_data_t {
+	char               id[10];
+	uint32_t           app_id;
+	sock_connection_id conn_id;
+} sock_initial_data_t;
+
 WSADATA sock_wsadata = {};
 bool    sock_server  = false;
 void  (*sock_on_receive_callback   )(sock_header_t header, const void *data);
@@ -117,6 +123,7 @@ void  (*sock_on_connection_callback)(sock_connection_id id, sock_connect_status_
 sock_conn_t        sock_conns[FD_MAX_EVENTS];
 int32_t            sock_conn_count = 0;
 sock_connection_id sock_self_id = -1;
+uint32_t           sock_app_id = 0;
 
 ///////////////////////////////////////////
 
@@ -139,7 +146,7 @@ void sock_shutdown() {
 	sock_conn_event_t *evt    = (sock_conn_event_t*)&msg[sizeof(sock_header_t)];
 	header->from      = sock_self_id;
 	header->to        = -1;
-	header->data_id   = sock_type_id(sock_conn_event_t);
+	header->data_id   = sock_hash_type(sock_conn_event_t);
 	header->data_size = sizeof(sock_conn_event_t);
 	evt->id     = sock_self_id;
 	evt->status = sock_connect_status_left;
@@ -182,7 +189,7 @@ void _sock_connection_close(sock_connection_id id, bool notify) {
 		sock_conn_event_t evt = {};
 		evt.id     = id;
 		evt.status = sock_connect_status_left;
-		sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
+		sock_send(sock_hash_type(sock_conn_event_t), sizeof(evt), &evt);
 	}
 }
 
@@ -269,9 +276,11 @@ void _sock_send_ex(sock_header_t header, const void *data) {
 
 ///////////////////////////////////////////
 
-int32_t sock_start_server(uint16_t port) {
+int32_t sock_start_server(uint32_t app_id, uint16_t port) {
 	int32_t result = _sock_init();
 	if (!result) return result;
+
+	sock_app_id = app_id;
 
 	char      port_str[32];
 	addrinfo *address = nullptr;
@@ -312,16 +321,18 @@ int32_t sock_start_server(uint16_t port) {
 	sock_conn_event_t evt = {};
 	evt.id     = sock_self_id;
 	evt.status = sock_connect_status_joined;
-	sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
+	sock_send(sock_hash_type(sock_conn_event_t), sizeof(evt), &evt);
 
 	return 1;
 }
 
 ///////////////////////////////////////////
 
-int32_t sock_start_client(const char *ip, uint16_t port) {
+int32_t sock_start_client(uint32_t app_id, const char *ip, uint16_t port) {
 	int32_t result = _sock_init();
 	if (!result) return result;
+
+	sock_app_id = app_id;
 
 	char      port_str[32];
 	addrinfo *address = nullptr;
@@ -341,7 +352,7 @@ int32_t sock_start_client(const char *ip, uint16_t port) {
 	SOCKET sock = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
 	if (sock == INVALID_SOCKET) {
 		freeaddrinfo(address);
-		return -2;
+		return -3;
 	}
 	if (connect(sock, address->ai_addr, (int)address->ai_addrlen) == SOCKET_ERROR) {
 		closesocket(sock);
@@ -349,12 +360,23 @@ int32_t sock_start_client(const char *ip, uint16_t port) {
 	}
 	freeaddrinfo(address);
 	if (sock == INVALID_SOCKET) {
-		return -3;
+		return -4;
 	}
 
 	// get a connection id from the server
-	recv(sock, (char*)&sock_self_id, sizeof(int32_t), 0);
+	sock_initial_data_t initial = {};
+	if (recv(sock, (char *)&initial, sizeof(initial), 0) != sizeof(initial)) {
+		closesocket(sock);
+		return -5;
+	}
 
+	// Make sure we've got a connection from something that looks about right
+	if (strcmp(initial.id, "warm_sock") != 0 || initial.app_id != sock_app_id) {
+		closesocket(sock);
+		return -6;
+	}
+
+	sock_self_id = initial.conn_id;
 	sock_server = false;
 	sock_conns[sock_self_id].sock = sock;
 	sock_conns[sock_self_id].type = sock_conn_type_primary;
@@ -402,13 +424,16 @@ int32_t _sock_server_new_connection() {
 	}
 
 	// Send the client its id
-	send(new_client, (char *)&id, sizeof(int32_t), 0);
+	sock_initial_data_t initial = {"warm_sock"};
+	initial.app_id  = sock_app_id;
+	initial.conn_id = id;
+	send(new_client, (char *)&initial, sizeof(initial), 0);
 
 	// Notify everyone of the new connection
 	sock_conn_event_t evt = {};
 	evt.id     = id;
 	evt.status = sock_connect_status_joined;
-	sock_send(sock_type_id(sock_conn_event_t), sizeof(evt), &evt);
+	sock_send(sock_hash_type(sock_conn_event_t), sizeof(evt), &evt);
 
 	return 1;
 }
@@ -581,7 +606,7 @@ void _sock_on_receive(sock_header_t header, const void *data) {
 	if (header.to != -1 && header.to != sock_self_id)
 		return;
 
-	if (header.data_id == sock_type_id(sock_conn_event_t)) {
+	if (header.data_id == sock_hash_type(sock_conn_event_t)) {
 		const sock_conn_event_t *evt = (sock_conn_event_t*)data;
 		if (sock_on_connection_callback) {
 			sock_on_connection_callback(evt->id, evt->status);

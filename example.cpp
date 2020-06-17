@@ -32,10 +32,10 @@ int main() {
 	// Start as either a server, or a client based on the project #defines
 #ifdef WARM_SOCK_SERVER
 	printf("Starting server:\n");
-	if (!sock_start_server(27015)) return 0;
+	if (!sock_start_server(sock_hash("Warm sock example"), 27015)) return 0;
 #else
 	printf("Starting client:\n");
-	if (!sock_start_client("127.0.0.1", 27015)) return 0;
+	if (!sock_start_client(sock_hash("Warm sock example"), "127.0.0.1", 27015)) return 0;
 #endif
 
 	// Poll for network events until it crashes, or we get bored!
@@ -62,7 +62,7 @@ void on_connection(sock_connection_id id, sock_connect_status_ status) {
 		printf("#%d has joined the session\n", id);
 		char message[128];
 		sprintf_s(message, "Welcome from #%d!", sock_get_id());
-		sock_send_to(id, sock_type_id_str("string"), strlen(message)+1, &message[0]);
+		sock_send_to(id, sock_hash("string"), strlen(message)+1, &message[0]);
 	} else if (status == sock_connect_status_left) {
 		printf("#%d has left the session.\n", id);
 	}
@@ -72,10 +72,10 @@ void on_connection(sock_connection_id id, sock_connect_status_ status) {
 
 void on_receive(sock_header_t header, const void *data) {
 	switch (header.data_id) {
-	case sock_type_id_str("string"): {
+	case sock_hash("string"): {
 		printf("#%d - %s\n", header.from, (char*)data);
 	} break;
-	case sock_type_id(test_data_t): {
+	case sock_hash_type(test_data_t): {
 		const test_data_t *test = (test_data_t *)data;
 		printf("test_data_t: [%.2f, %.2f, %.2f], [%.2f, %.2f, %.2f]\n",
 			test->position [0], test->position [1], test->position [2],
@@ -97,7 +97,7 @@ void check_input() {
 
 			// Send a message using a struct
 			test_data_t test = { {1, 2, 3}, {3, 2, 1} };
-			sock_send(sock_type_id(test_data_t), sizeof(test), &test);
+			sock_send(sock_hash_type(test_data_t), sizeof(test), &test);
 
 		} else {
 
@@ -108,7 +108,7 @@ void check_input() {
 			_putch(ch);
 			if (ch == '\r' || curr == (_countof(msg) - 1)) {
 				msg[curr] = '\0';
-				sock_send(sock_type_id_str("string"), curr + 1, &msg);
+				sock_send(sock_hash("string"), curr + 1, &msg);
 				curr = 0;
 			} else {
 				msg[curr] = ch;
