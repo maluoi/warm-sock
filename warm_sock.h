@@ -16,6 +16,8 @@ References:
 #pragma once
 #pragma comment(lib, "Ws2_32.lib")
 
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+
 #include <stdint.h>
 
 ///////////////////////////////////////////
@@ -52,6 +54,11 @@ void    sock_on_receive   (void (*on_receive   )(sock_header_t header, const voi
 void    sock_on_connection(void (*on_connection)(sock_connection_id id, sock_connect_status_ status));
 bool               sock_is_server();
 sock_connection_id sock_get_id   ();
+
+bool _sock_multicast_query(uint16_t port);
+void _sock_multicast_begin(uint16_t port);
+void _sock_multicast_end();
+bool _sock_multicast_step();
 
 ///////////////////////////////////////////
 
@@ -641,6 +648,86 @@ void sock_on_connection(void (*on_connection)(sock_connection_id id, sock_connec
 }
 
 ///////////////////////////////////////////
+
+// https://gist.github.com/hostilefork/f7cae3dc33e7416f2dd25a402857b6c6
+SOCKET sock_discovery;
+void _sock_multicast_begin(uint16_t port) {
+	_sock_init();
+	
+	sock_discovery = socket(AF_INET, SOCK_DGRAM, 0);
+	//uint32_t yes = 1;
+	//setsockopt(sock_discovery, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(yes));
+
+	sockaddr_in addr = {};
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	addr.sin_port        = htons(port);
+	bind(sock_discovery, (sockaddr *)&addr, sizeof(addr));
+
+	ip_mreq mreq;
+	mreq.imr_multiaddr.s_addr = inet_addr("239.255.255.250");
+	mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+	setsockopt(sock_discovery, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&mreq, sizeof(mreq));
+}
+void _sock_multicast_end() {
+	closesocket(sock_discovery);
+}
+bool _sock_multicast_step() {
+	char        buffer[1024];
+	sockaddr_in addr = {};
+	int         addrlen = sizeof(addr);
+	int         bytes   = recvfrom(sock_discovery, buffer, _countof(buffer), 0, (sockaddr *) &addr, &addrlen );
+	printf("from %s\n", inet_ntoa(addr.sin_addr));
+	if (bytes >= sizeof(sock_initial_data_t)) {
+		sock_initial_data_t *data = (sock_initial_data_t *)buffer;
+
+		// Check if it's intended for us
+		if (strcmp(data->id, "warm_sock") == 0 && data->app_id == sock_app_id) {
+			const char *message = "Connect to here:";
+			bytes = sendto(sock_discovery, message, strlen(message), 0, (sockaddr*)&addr, sizeof(addr) );
+			if (bytes < 1) {
+				return false;
+			}
+		}
+	} else if (bytes < 1) {
+		return false;
+	}
+
+	return true;
+}
+bool _sock_multicast_query(uint16_t port) {
+	_sock_init();
+
+	sock_discovery = socket(AF_INET, SOCK_DGRAM, 0);
+
+	sockaddr_in addr = {};
+	addr.sin_family      = AF_INET;
+	addr.sin_addr.s_addr = inet_addr("239.255.255.250");
+	addr.sin_port        = htons(port);
+	bind(sock_discovery, (sockaddr *)&addr, sizeof(addr));
+
+	// Send off a hello message
+	sock_initial_data_t data = { "warm_sock" };
+	data.app_id  = sock_app_id;
+	data.conn_id = 0;
+	int nbytes = sendto(sock_discovery, (char*)&data, sizeof(data), 0, (sockaddr*)&addr, sizeof(addr) );
+	if (nbytes < 1) {
+		return false;
+	}
+
+	// Wait for a response
+	char        buffer[1024];
+	sockaddr_in server_addr = {};
+	int         addrlen = sizeof(server_addr);
+	int         bytes   = recvfrom(sock_discovery, buffer, _countof(buffer), 0, (sockaddr*)&server_addr, &addrlen );
+	if (bytes < 1) {
+		return false;
+	}
+	printf("%s\n", inet_ntoa(server_addr.sin_addr));
+
+	closesocket(sock_discovery);
+	return true;
+}
 
 #endif
 

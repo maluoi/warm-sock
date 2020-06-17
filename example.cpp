@@ -25,6 +25,16 @@ void check_input();
 ///////////////////////////////////////////
 
 int main() {
+	sock_app_id = sock_hash("Warm sock example");
+#ifdef WARM_SOCK_SERVER
+	_sock_multicast_begin(27016);
+	while (_sock_multicast_step()) {}
+	_sock_multicast_end();
+#else
+	_sock_multicast_query(27016);
+#endif
+	return 1;
+
 	// Set up our callback functions
 	sock_on_receive   (on_receive);
 	sock_on_connection(on_connection);
