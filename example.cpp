@@ -9,10 +9,10 @@
 
 ///////////////////////////////////////////
 
-struct test_data_t {
+typedef struct test_data_t {
 	float position[3];
 	float direction[3];
-};
+} test_data_t;
 
 bool app_run = true;
 char app_names[SOCK_MAX_CONNECTIONS][32];
@@ -84,7 +84,7 @@ void on_receive(sock_header_t header, const void *data) {
 		printf("%s - %s\n", app_names[header.from], (char*)data);
 	} break;
 	case sock_hash("user_name"): {
-		strcpy_s(app_names[header.from], (char*)data);
+		strcpy_s(app_names[header.from], sizeof(app_names[header.from]), (char*)data);
 		if (header.from != sock_get_id())
 			printf("%s has joined\n", app_names[header.from]);
 	} break;

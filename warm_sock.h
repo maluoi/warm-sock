@@ -23,6 +23,7 @@ References:
 #endif
 
 #include <stdint.h>
+#include <stdbool.h>
 
 ///////////////////////////////////////////
 
@@ -130,7 +131,7 @@ typedef struct sock_initial_data_t {
 	sock_connection_id conn_id;
 } sock_initial_data_t;
 
-WSADATA sock_wsadata = {};
+WSADATA sock_wsadata = {0};
 SOCKET  sock_discovery;
 bool    sock_server  = false;
 void  (*sock_on_receive_callback   )(sock_header_t header, const void *data);
@@ -189,9 +190,9 @@ void sock_shutdown() {
 	
 	// Close down the primary socket
 	_sock_connection_close(sock_self_id, false);
-
+	
 	WSACleanup();
-	sock_wsadata = {};
+	memset(&sock_wsadata, 0, sizeof(sock_wsadata));
 }
 
 ///////////////////////////////////////////
@@ -209,7 +210,7 @@ void _sock_connection_close(sock_connection_id id, bool notify) {
 	sock_conn_count -= 1;
 
 	if (notify) {
-		sock_conn_event_t evt = {};
+		sock_conn_event_t evt = {0};
 		evt.id     = id;
 		evt.status = sock_connect_status_left;
 		sock_send(sock_hash_type(sock_conn_event_t), sizeof(evt), &evt);
@@ -219,7 +220,7 @@ void _sock_connection_close(sock_connection_id id, bool notify) {
 ///////////////////////////////////////////
 
 void _sock_buffer_create(sock_buffer_t *buffer) {
-	*buffer = {};
+	memset(buffer, 0, sizeof(sock_buffer_t));
 	buffer->size = SOCK_BUFFER_SIZE;
 	buffer->data = (char*)malloc(buffer->size);
 }
@@ -228,7 +229,7 @@ void _sock_buffer_create(sock_buffer_t *buffer) {
 
 void _sock_buffer_free(sock_buffer_t *buffer) {
 	free(buffer->data);
-	*buffer = {};
+	memset(buffer, 0, sizeof(sock_buffer_t));
 }
 
 ///////////////////////////////////////////
@@ -300,20 +301,19 @@ void _sock_send_ex(sock_header_t header, const void *data) {
 ///////////////////////////////////////////
 
 int32_t sock_start_server() {
-	char      port_str[32];
-	addrinfo *address = nullptr;
-	addrinfo  hints;
+	char             port_str[32];
+	struct addrinfo *address = NULL;
+	struct addrinfo  hints = {0};
 
 	// convert the port to a string
 	sprintf_s(port_str, "%hu", sock_port);
 
 	// Create socket as server
-	hints = {};
 	hints.ai_family   = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 	hints.ai_flags    = AI_PASSIVE;
-	if (getaddrinfo(nullptr, port_str, &hints, &address) != 0) 
+	if (getaddrinfo(NULL, port_str, &hints, &address) != 0) 
 		return -1;
 	
 	// create, bind, and begin listening on the socket
@@ -339,7 +339,7 @@ int32_t sock_start_server() {
 	_sock_multicast_begin();
 
 	// Notify everyone (mostly just self) of the new connection
-	sock_conn_event_t evt = {};
+	sock_conn_event_t evt = {0};
 	evt.id     = sock_self_id;
 	evt.status = sock_connect_status_joined;
 	sock_send(sock_hash_type(sock_conn_event_t), sizeof(evt), &evt);
@@ -350,15 +350,14 @@ int32_t sock_start_server() {
 ///////////////////////////////////////////
 
 int32_t sock_start_client(const char *ip) {
-	char      port_str[32];
-	addrinfo *address = nullptr;
-	addrinfo  hints;
+	char             port_str[32];
+	struct addrinfo *address = NULL;
+	struct addrinfo  hints = {0};
 
 	// convert the port to a string
 	sprintf_s(port_str, "%hu", sock_port);
 
 	// Create socket as client
-	hints = {};
 	hints.ai_family   = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
@@ -380,7 +379,7 @@ int32_t sock_start_client(const char *ip) {
 	}
 
 	// get a connection id from the server
-	sock_initial_data_t initial = {};
+	sock_initial_data_t initial = {0};
 	if (recv(sock, (char *)&initial, sizeof(initial), 0) != sizeof(initial)) {
 		closesocket(sock);
 		return -5;
@@ -406,9 +405,9 @@ int32_t sock_start_client(const char *ip) {
 ///////////////////////////////////////////
 
 int32_t _sock_server_new_connection() {
-	sockaddr_in address;
-	int32_t     address_size = sizeof(sockaddr_in);
-	SOCKET      new_client   = accept(sock_conns[sock_self_id].sock, (sockaddr*)&address, &address_size);
+	struct sockaddr_in address;
+	int32_t     address_size = sizeof(struct sockaddr_in);
+	SOCKET      new_client   = accept(sock_conns[sock_self_id].sock, (struct sockaddr*)&address, &address_size);
 	if (new_client == INVALID_SOCKET)
 		return -1;
 
@@ -446,7 +445,7 @@ int32_t _sock_server_new_connection() {
 	send(new_client, (char *)&initial, sizeof(initial), 0);
 
 	// Notify everyone of the new connection
-	sock_conn_event_t evt = {};
+	sock_conn_event_t evt = {0};
 	evt.id     = id;
 	evt.status = sock_connect_status_joined;
 	sock_send(sock_hash_type(sock_conn_event_t), sizeof(evt), &evt);
@@ -501,7 +500,7 @@ bool _sock_server_poll() {
 
 	// 'select' will check all the FD_SET sockets to see if any of them are
 	// ready for read/write/exception information
-	timeval time = {};
+	struct timeval time = {0};
 	if (select(0, &fd_read, &fd_write, &fd_except, &time) > 0) {
 
 		// Check our connection discovery socket
@@ -512,45 +511,45 @@ bool _sock_server_poll() {
 
 		count = 0;
 		for (sock_connection_id i = 0; i < _countof(sock_conns) && count < sock_conn_count; i++) {
-			sock_conn_t &conn = sock_conns[i];
-			if (conn.type == sock_conn_type_free) continue;
+			sock_conn_t *conn = &sock_conns[i];
+			if (conn->type == sock_conn_type_free) continue;
 			count += 1;
 
-			if (conn.type == sock_conn_type_primary) {
+			if (conn->type == sock_conn_type_primary) {
 				// Check for connecting clients
-				if (FD_ISSET(conn.sock, &fd_except)) {
+				if (FD_ISSET(conn->sock, &fd_except)) {
 					result = false;
 					printf("primary socket failed with error: %d\n", WSAGetLastError());
-					FD_CLR(conn.sock, &fd_except);
-				} else if (FD_ISSET(conn.sock, &fd_read)) {
+					FD_CLR(conn->sock, &fd_except);
+				} else if (FD_ISSET(conn->sock, &fd_read)) {
 					_sock_server_new_connection();
-					FD_CLR(conn.sock, &fd_read);
+					FD_CLR(conn->sock, &fd_read);
 				}
 			} else {
 				// Receive and send data to any client that's got something
-				if (FD_ISSET(conn.sock, &fd_except)) {
+				if (FD_ISSET(conn->sock, &fd_except)) {
 					_sock_connection_close(i, true);
-					FD_CLR(conn.sock, &fd_except);
+					FD_CLR(conn->sock, &fd_except);
 				} else {
-					if (FD_ISSET(conn.sock, &fd_read)) {
-						data_size = recv(conn.sock, &conn.in_buffer.data[conn.in_buffer.curr], conn.in_buffer.size - conn.in_buffer.curr, 0);
-						FD_CLR(conn.sock, &fd_read);
+					if (FD_ISSET(conn->sock, &fd_read)) {
+						data_size = recv(conn->sock, &conn->in_buffer.data[conn->in_buffer.curr], conn->in_buffer.size - conn->in_buffer.curr, 0);
+						FD_CLR(conn->sock, &fd_read);
 						if (data_size < 1) {
 							if (data_size < 0)
 								printf("recv failed with error: %d\n", WSAGetLastError());
 							_sock_connection_close(i, true);
 						} else {
-							conn.in_buffer.curr += data_size;
-							_sock_buffer_submit(&conn.in_buffer);
+							conn->in_buffer.curr += data_size;
+							_sock_buffer_submit(&conn->in_buffer);
 						}
 					}
-					if (FD_ISSET(conn.sock, &fd_write)) {
-						if (conn.out_buffer.curr > 0) {
-							if (send(conn.sock, conn.out_buffer.data, conn.out_buffer.curr, 0) == SOCKET_ERROR)
+					if (FD_ISSET(conn->sock, &fd_write)) {
+						if (conn->out_buffer.curr > 0) {
+							if (send(conn->sock, conn->out_buffer.data, conn->out_buffer.curr, 0) == SOCKET_ERROR)
 								printf("send failed with error: %d\n", WSAGetLastError());
-							conn.out_buffer.curr = 0;
+							conn->out_buffer.curr = 0;
 						}
-						FD_CLR(conn.sock, &fd_write);
+						FD_CLR(conn->sock, &fd_write);
 					}
 				}
 			}
@@ -563,7 +562,7 @@ bool _sock_server_poll() {
 ///////////////////////////////////////////
 
 bool _sock_client_poll() {
-	sock_conn_t &conn      = sock_conns[sock_self_id];
+	sock_conn_t *conn      = &sock_conns[sock_self_id];
 	int32_t      data_size = 0;
 	bool         result    = true;
 
@@ -572,37 +571,37 @@ bool _sock_client_poll() {
 	FD_ZERO(&fd_write);
 	FD_ZERO(&fd_except);
 
-	FD_SET(conn.sock, &fd_except);
-	FD_SET(conn.sock, &fd_read);
-	FD_SET(conn.sock, &fd_write);
+	FD_SET(conn->sock, &fd_except);
+	FD_SET(conn->sock, &fd_read);
+	FD_SET(conn->sock, &fd_write);
 
-	timeval time = {};
+	struct timeval time = {0};
 	if (select(0, &fd_read, &fd_write, &fd_except, &time) > 0) {
 		
 
-		if (FD_ISSET(conn.sock, &fd_except)) {
+		if (FD_ISSET(conn->sock, &fd_except)) {
 			printf("primary socket failed with error: %d\n", WSAGetLastError());
 			result = false;
-			FD_CLR(conn.sock, &fd_except);
+			FD_CLR(conn->sock, &fd_except);
 		} else {
-			if (FD_ISSET(conn.sock, &fd_read)) {
-				data_size = recv(conn.sock, (char*)&conn.in_buffer.data[conn.in_buffer.curr], conn.in_buffer.size - conn.in_buffer.curr, 0);
+			if (FD_ISSET(conn->sock, &fd_read)) {
+				data_size = recv(conn->sock, (char*)&conn->in_buffer.data[conn->in_buffer.curr], conn->in_buffer.size - conn->in_buffer.curr, 0);
 				if (data_size < 0) {
 					printf("recv failed with error: %d\n", WSAGetLastError());
 					result = false;
 				} else {
-					conn.in_buffer.curr += data_size;
-					_sock_buffer_submit(&conn.in_buffer);
+					conn->in_buffer.curr += data_size;
+					_sock_buffer_submit(&conn->in_buffer);
 				}
-				FD_CLR(conn.sock, &fd_read);
+				FD_CLR(conn->sock, &fd_read);
 			}
-			if (FD_ISSET(conn.sock, &fd_write)) {
-				if (conn.out_buffer.curr > 0) {
-					if (send(conn.sock, conn.out_buffer.data, conn.out_buffer.curr, 0) == SOCKET_ERROR)
+			if (FD_ISSET(conn->sock, &fd_write)) {
+				if (conn->out_buffer.curr > 0) {
+					if (send(conn->sock, conn->out_buffer.data, conn->out_buffer.curr, 0) == SOCKET_ERROR)
 						printf("send failed with error: %d\n", WSAGetLastError());
-					conn.out_buffer.curr = 0;
+					conn->out_buffer.curr = 0;
 				}
-				FD_CLR(conn.sock, &fd_write);
+				FD_CLR(conn->sock, &fd_write);
 			}
 		}
 	}
@@ -663,13 +662,13 @@ void sock_on_connection(void (*on_connection)(sock_connection_id id, sock_connec
 void _sock_multicast_begin() {
 	sock_discovery = socket(AF_INET, SOCK_DGRAM, 0);
 
-	sockaddr_in addr = {};
+	struct sockaddr_in addr = {0};
 	addr.sin_family      = AF_INET;
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	addr.sin_port        = htons(sock_port+1);
-	bind(sock_discovery, (sockaddr *)&addr, sizeof(addr));
+	bind(sock_discovery, (struct sockaddr *)&addr, sizeof(addr));
 
-	ip_mreq mreq;
+	struct ip_mreq mreq;
 	mreq.imr_multiaddr.s_addr = inet_addr("224.0.0.1");
 	mreq.imr_interface.s_addr = htonl(INADDR_ANY);
 	setsockopt(sock_discovery, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&mreq, sizeof(mreq));
@@ -684,17 +683,17 @@ void _sock_multicast_end() {
 ///////////////////////////////////////////
 
 bool _sock_multicast_step() {
-	char        buffer[1024];
-	sockaddr_in addr = {};
-	int         addrlen = sizeof(addr);
-	int         bytes   = recvfrom(sock_discovery, buffer, _countof(buffer), 0, (sockaddr *) &addr, &addrlen );
+	struct sockaddr_in addr = {0};
+	char buffer[1024];
+	int  addrlen = sizeof(addr);
+	int  bytes   = recvfrom(sock_discovery, buffer, _countof(buffer), 0, (struct sockaddr *) &addr, &addrlen );
 	if (bytes >= sizeof(sock_initial_data_t)) {
 		sock_initial_data_t *data = (sock_initial_data_t *)buffer;
 
 		// Check if it's intended for us
 		if (strcmp(data->id, "warm_sock") == 0 && data->app_id == sock_app_id) {
 			const char *message = "Welcome!";
-			bytes = sendto(sock_discovery, message, (int32_t)strlen(message)+1, 0, (sockaddr*)&addr, sizeof(addr) );
+			bytes = sendto(sock_discovery, message, (int32_t)strlen(message)+1, 0, (struct sockaddr*)&addr, sizeof(addr) );
 			if (bytes < 1) {
 				return false;
 			}
@@ -711,17 +710,17 @@ bool _sock_multicast_step() {
 bool sock_find_server(char *out_address, int32_t out_address_size) {
 	sock_discovery = socket(AF_INET, SOCK_DGRAM, 0);
 
-	sockaddr_in addr = {};
+	struct sockaddr_in addr = {0};
 	addr.sin_family      = AF_INET;
 	addr.sin_addr.s_addr = inet_addr("224.0.0.1");
 	addr.sin_port        = htons(sock_port+1);
-	bind(sock_discovery, (sockaddr *)&addr, sizeof(addr));
+	bind(sock_discovery, (struct sockaddr *)&addr, sizeof(addr));
 
 	// Send off a hello message
 	sock_initial_data_t data = { "warm_sock" };
 	data.app_id  = sock_app_id;
 	data.conn_id = 0;
-	int nbytes = sendto(sock_discovery, (char*)&data, sizeof(data), 0, (sockaddr*)&addr, sizeof(addr) );
+	int nbytes = sendto(sock_discovery, (char*)&data, sizeof(data), 0, (struct sockaddr*)&addr, sizeof(addr) );
 	if (nbytes < 1) {
 		return false;
 	}
@@ -733,16 +732,16 @@ bool sock_find_server(char *out_address, int32_t out_address_size) {
 
 	FD_SET(sock_discovery, &fd_read);
 
-	timeval time   = {0,500*1000}; // only wait 500ms for an answer
-	bool    result = false;
+	struct timeval time   = {0,500*1000}; // only wait 500ms for an answer
+	bool           result = 0;
 	if (select(0, &fd_read, &fd_write, &fd_except, &time) > 0) {
 		// Wait for a response
 		if (FD_ISSET(sock_discovery, &fd_read)) {
-			const char  expected[] = "Welcome!";
-			char        buffer[_countof(expected)];
-			sockaddr_in server_addr = {};
-			int         addrlen = sizeof(server_addr);
-			int         bytes = recvfrom(sock_discovery, buffer, _countof(buffer), 0, (sockaddr *)&server_addr, &addrlen);
+			struct sockaddr_in server_addr = {0};
+			const char expected[] = "Welcome!";
+			char       buffer[_countof(expected)];
+			int        addrlen = sizeof(server_addr);
+			int        bytes   = recvfrom(sock_discovery, buffer, _countof(buffer), 0, (struct sockaddr *)&server_addr, &addrlen);
 			if (bytes >= _countof(expected)) {
 				if (strcmp(expected, buffer) == 0) {
 					strcpy_s(out_address, out_address_size, inet_ntoa(server_addr.sin_addr));
