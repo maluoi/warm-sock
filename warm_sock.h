@@ -27,6 +27,7 @@ References:
 ///////////////////////////////////////////
 
 typedef int16_t sock_connection_id;
+typedef uint32_t sock_data_id;
 
 typedef enum sock_connect_status_ {
 	sock_connect_status_joined,
@@ -40,7 +41,7 @@ typedef struct sock_buffer_t {
 } sock_buffer_t;
 
 typedef struct sock_header_t {
-	uint32_t           data_id;
+	sock_data_id       data_id;
 	int32_t            data_size;
 	sock_connection_id from;
 	sock_connection_id to;
@@ -48,13 +49,13 @@ typedef struct sock_header_t {
 
 ///////////////////////////////////////////
 
-int32_t sock_init         (uint32_t app_id, uint16_t port);
+int32_t sock_init         (sock_data_id app_id, uint16_t port);
 bool    sock_find_server  (char *out_address, int32_t out_address_size);
 int32_t sock_start_server ();
 int32_t sock_start_client (const char *ip);
 void    sock_shutdown     ();
-void    sock_send         (uint32_t data_id, int32_t data_size, const void *data);
-void    sock_send_to      (sock_connection_id to, uint32_t data_id, int32_t data_size, const void *data);
+void    sock_send         (sock_data_id data_id, int32_t data_size, const void *data);
+void    sock_send_to      (sock_connection_id to, sock_data_id data_id, int32_t data_size, const void *data);
 bool    sock_poll         ();
 void    sock_on_receive   (void (*on_receive   )(sock_header_t header, const void *data));
 void    sock_on_connection(void (*on_connection)(sock_connection_id id, sock_connect_status_ status));
@@ -125,7 +126,7 @@ typedef struct sock_conn_event_t {
 
 typedef struct sock_initial_data_t {
 	char               id[10];
-	uint32_t           app_id;
+	sock_data_id       app_id;
 	sock_connection_id conn_id;
 } sock_initial_data_t;
 
@@ -138,12 +139,12 @@ void  (*sock_on_connection_callback)(sock_connection_id id, sock_connect_status_
 sock_conn_t        sock_conns[SOCK_MAX_CONNECTIONS];
 int32_t            sock_conn_count = 0;
 sock_connection_id sock_self_id = -1;
-uint32_t           sock_app_id = 0;
+sock_data_id       sock_app_id = 0;
 uint16_t           sock_port = 0;
 
 ///////////////////////////////////////////
 
-int32_t sock_init (uint32_t app_id, uint16_t port) {
+int32_t sock_init (sock_data_id app_id, uint16_t port) {
 	if (sock_wsadata.wVersion != 0)
 		return 1;
 
@@ -242,7 +243,7 @@ void _sock_buffer_add(sock_buffer_t *buffer, void *data, int32_t size) {
 
 ///////////////////////////////////////////
 
-void sock_send(uint32_t data_id, int32_t data_size, const void *data) {
+void sock_send(sock_data_id data_id, int32_t data_size, const void *data) {
 	sock_header_t header;
 	header.data_id   = data_id;
 	header.data_size = data_size;
@@ -253,7 +254,7 @@ void sock_send(uint32_t data_id, int32_t data_size, const void *data) {
 
 ///////////////////////////////////////////
 
-void sock_send_to(sock_connection_id to, uint32_t data_id, int32_t data_size, const void *data) {
+void sock_send_to(sock_connection_id to, sock_data_id data_id, int32_t data_size, const void *data) {
 	sock_header_t header;
 	header.data_id   = data_id;
 	header.data_size = data_size;
