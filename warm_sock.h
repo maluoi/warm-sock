@@ -18,6 +18,10 @@ References:
 
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 
+#ifndef SOCK_MAX_CONNECTIONS
+#define SOCK_MAX_CONNECTIONS 32
+#endif
+
 #include <stdint.h>
 
 ///////////////////////////////////////////
@@ -131,7 +135,7 @@ bool    sock_server  = false;
 void  (*sock_on_receive_callback   )(sock_header_t header, const void *data);
 void  (*sock_on_connection_callback)(sock_connection_id id, sock_connect_status_ status);
 
-sock_conn_t        sock_conns[FD_MAX_EVENTS];
+sock_conn_t        sock_conns[SOCK_MAX_CONNECTIONS];
 int32_t            sock_conn_count = 0;
 sock_connection_id sock_self_id = -1;
 uint32_t           sock_app_id = 0;
@@ -689,7 +693,7 @@ bool _sock_multicast_step() {
 		// Check if it's intended for us
 		if (strcmp(data->id, "warm_sock") == 0 && data->app_id == sock_app_id) {
 			const char *message = "Welcome!";
-			bytes = sendto(sock_discovery, message, strlen(message)+1, 0, (sockaddr*)&addr, sizeof(addr) );
+			bytes = sendto(sock_discovery, message, (int32_t)strlen(message)+1, 0, (sockaddr*)&addr, sizeof(addr) );
 			if (bytes < 1) {
 				return false;
 			}

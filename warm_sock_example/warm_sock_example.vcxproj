@@ -18,18 +18,13 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\warm_sock.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="..\example.cpp" />
-  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{2237349a-5565-471a-89be-9833cc25b7ca}</ProjectGuid>
-    <RootNamespace>warmsockclient</RootNamespace>
+    <ProjectGuid>{fd96f7f7-443e-4758-ad2f-101427894081}</ProjectGuid>
+    <RootNamespace>warmsockserver</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>warm_sock_example</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -148,6 +143,12 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\example.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\warm_sock.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

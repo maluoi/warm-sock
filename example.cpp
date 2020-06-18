@@ -15,6 +15,8 @@ struct test_data_t {
 };
 
 bool app_run = true;
+char app_names[SOCK_MAX_CONNECTIONS][32];
+char app_user_name[32];
 
 ///////////////////////////////////////////
 
@@ -25,6 +27,9 @@ void check_input();
 ///////////////////////////////////////////
 
 int main() {
+	printf ("What name would you like to go by?\n");
+	scanf_s("%s", app_user_name, (uint32_t)sizeof(app_user_name));
+
 	// Set up our callback functions
 	sock_on_receive   (on_receive);
 	sock_on_connection(on_connection);
@@ -57,18 +62,17 @@ int main() {
 void on_connection(sock_connection_id id, sock_connect_status_ status) {
 	if (id == sock_get_id()) {
 		printf(status == sock_connect_status_joined
-			? "Connected to server as #%d.\n"
-			: "Disconnected from server.\n", id);
+			? "Connected to server as #%d, welcome %s!\n"
+			: "Disconnected from server.\n", id, app_user_name);
+		if (status == sock_connect_status_joined)
+			sock_send(sock_hash("user_name"), (int32_t)strlen(app_user_name)+1, app_user_name);
 		return;
 	}
 
 	if (status == sock_connect_status_joined) {
-		printf("#%d has joined the session\n", id);
-		char message[128];
-		sprintf_s(message, "Welcome from #%d!", sock_get_id());
-		sock_send_to(id, sock_hash("string"), strlen(message)+1, &message[0]);
+		sock_send_to(id, sock_hash("user_name"), (int32_t)strlen(app_user_name)+1, app_user_name);
 	} else if (status == sock_connect_status_left) {
-		printf("#%d has left the session.\n", id);
+		printf("%s has left the session.\n", app_names[id]);
 	}
 }
 
@@ -77,7 +81,12 @@ void on_connection(sock_connection_id id, sock_connect_status_ status) {
 void on_receive(sock_header_t header, const void *data) {
 	switch (header.data_id) {
 	case sock_hash("string"): {
-		printf("#%d - %s\n", header.from, (char*)data);
+		printf("%s - %s\n", app_names[header.from], (char*)data);
+	} break;
+	case sock_hash("user_name"): {
+		strcpy_s(app_names[header.from], (char*)data);
+		if (header.from != sock_get_id())
+			printf("%s has joined\n", app_names[header.from]);
 	} break;
 	case sock_hash_type(test_data_t): {
 		const test_data_t *test = (test_data_t *)data;
